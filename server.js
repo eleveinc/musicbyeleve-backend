@@ -1,57 +1,53 @@
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('@distube/ytdl-core');
-const fs = require('fs');
 const app = express();
 
 app.use(cors({ origin: '*' }));
 
-// --- LOAD COOKIES (The Anti-Ban Passport) ---
-let agentOptions = {};
-try {
-    const cookies = JSON.parse(fs.readFileSync('cookies.json'));
-    agentOptions = { agent: ytdl.createAgent(cookies) };
-    console.log("✅ Cookies loaded! YouTube will trust this server.");
-} catch (error) {
-    console.error("⚠️ No cookies found. You might get Error 429.");
-}
+// Root route
+app.get('/', (req, res) => res.send('Eleve Backend (Proxy Engine) is Online'));
 
-app.get('/', (req, res) => res.send('Eleve Backend is Live (Authenticated)'));
-
+// New Download Logic
 app.get('/download', async (req, res) => {
+    const videoId = req.query.id;
+    const type = req.query.type || 'video'; // 'audio' or 'video'
+    
+    if (!videoId) return res.status(400).send('Missing Video ID');
+
+    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    
+    console.log(`Processing: ${videoId} [${type}]`);
+
     try {
-        const videoId = req.query.id;
-        const type = req.query.type || 'video';
+        // We ask Cobalt API to handle the YouTube connection for us
+        // This bypasses the Render IP ban completely.
+        const response = await fetch('https://api.cobalt.tools/api/json', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify({
+                url: videoUrl,
+                isAudioOnly: type === 'audio', // If true, gives MP3
+                aFormat: 'mp3' // Ensure audio is MP3 format
+            })
+        });
 
-        if (!videoId || !ytdl.validateID(videoId)) return res.status(400).send('Invalid ID');
+        const data = await response.json();
 
-        const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-        
-        // Use the cookies (agentOptions) to get info
-        const info = await ytdl.getInfo(videoUrl, agentOptions);
-        const cleanTitle = info.videoDetails.title.replace(/[^\w\s]/gi, '');
-
-        let formatSettings = type === 'audio' 
-            ? { quality: 'highestaudio', filter: 'audioonly' } 
-            : { quality: 'lowestvideo', filter: 'audioandvideo' };
-
-        let contentType = type === 'audio' ? 'audio/mpeg' : 'video/mp4';
-        let fileExt = type === 'audio' ? 'mp3' : 'mp4';
-
-        res.header('Content-Disposition', `attachment; filename="${cleanTitle}.${fileExt}"`);
-        res.header('Content-Type', contentType);
-
-        // Download using the cookies
-        ytdl(videoUrl, { ...formatSettings, ...agentOptions }).pipe(res);
+        if (data.url) {
+            // Success! We redirect the user to the file directly.
+            // This starts the download immediately in their browser.
+            return res.redirect(data.url);
+        } else {
+            // If the engine failed (rare), show the reason
+            throw new Error(data.text || 'Engine could not generate link');
+        }
 
     } catch (error) {
-        console.error('Error:', error.message);
-        // If 429 happens even with cookies, tell the user
-        if(error.statusCode === 429) {
-             res.status(429).send('Server is cooling down. Please try again in a few minutes.');
-        } else {
-             res.status(500).send(`Server Error: ${error.message}`);
-        }
+        console.error('Proxy Error:', error.message);
+        res.status(500).send(`Download Error: ${error.message}`);
     }
 });
 
