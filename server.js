@@ -1,32 +1,51 @@
-const express = require('express');
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+kconst express = require('express');
 const cors = require('cors');
 const ytdl = require('@distube/ytdl-core');
 const app = express();
 
 app.use(cors({ origin: '*' }));
 
-// 1. Home Route (So you know it's alive)
+// Root route to check if server is alive
 app.get('/', (req, res) => {
-    res.send('Eleve Backend is Online & Running! Use /download to get files.');
+    res.send('Eleve Backend is Online (Anti-Bot Mode Active)');
 });
 
-// 2. Download Route
 app.get('/download', async (req, res) => {
     try {
         const videoId = req.query.id;
         const type = req.query.type || 'video';
 
         if (!videoId || !ytdl.validateID(videoId)) {
-            return res.status(400).send('Error: Invalid YouTube ID');
+            return res.status(400).send('Invalid YouTube ID');
         }
 
         const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+        // --- THE FIX: FORCE ANDROID CLIENT ---
+        // We tell YouTube we are an Android app to bypass the 429 block
+        const requestOptions = {
+            playerClients: ["ANDROID", "IOS"] 
+        };
+
+        // 1. Get Info with Anti-Bot Options
+        const info = await ytdl.getInfo(videoUrl, requestOptions);
         
-        // Get Info
-        const info = await ytdl.getInfo(videoUrl);
         const cleanTitle = info.videoDetails.title.replace(/[^\w\s]/gi, '');
 
-        // Choose Format
         let formatSettings = {};
         let fileExt = 'mp4';
         let contentType = 'video/mp4';
@@ -41,17 +60,25 @@ app.get('/download', async (req, res) => {
             contentType = 'video/mp4';
         }
 
-        // Set Headers
+        // Add the request options to the download call too
+        const downloadOptions = {
+            ...formatSettings,
+            ...requestOptions
+        };
+
         res.header('Content-Disposition', `attachment; filename="${cleanTitle}.${fileExt}"`);
         res.header('Content-Type', contentType);
 
-        // Pipe Stream
-        ytdl(videoUrl, formatSettings).pipe(res);
+        ytdl(videoUrl, downloadOptions).pipe(res);
 
     } catch (error) {
-        console.error('Real Error:', error);
-        // SHOW THE REAL ERROR ON SCREEN
-        res.status(500).send(`Server Error Details: ${error.message}`);
+        console.error('Server Error:', error.message);
+        // If it's still a 429, we tell the user clearly
+        if (error.statusCode === 429) {
+            res.status(429).send('Error 429: YouTube is blocking this server IP. Try again in 5 minutes.');
+        } else {
+            res.status(500).send(`Server Error: ${error.message}`);
+        }
     }
 });
 
